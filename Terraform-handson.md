@@ -381,6 +381,26 @@ AWS_SECRET_KEY = "8fC6nwU71J5mPy6Fu0iCnPCe3m6uR+7SIBdv8QKv"
 $ ssh-keygen -f mykey
 
 
+# initialize the terraform directoey
+
+$ terraform init
+
+# plan terraform infra
+
+$ terraform plan -out out.terraform
+
+# apply the terraform infra
+
+$ terraform apply out.terraform
+
+# view the terraform state
+
+$ terraform show
+
+# destory the infra
+
+$ terraform destroy
+
 
 
 
