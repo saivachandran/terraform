@@ -1301,6 +1301,363 @@ $ terraform destroy
 ----------------------------------------------------------------------------------------------
 
 
+# aws user data with docker install and ebs volume attachement using terraform
+--------------------------------------------------------------------------
+
+# 1. touch cloudinit.tf file paste the following content
+
+data "template_file" "init-script" {
+  template = file("scripts/init.cfg")
+  vars = {
+    REGION = var.AWS_REGION
+  }
+}
+
+data "template_file" "shell-script" {
+  template = file("scripts/volumes.sh")
+  vars = {
+    DEVICE = var.INSTANCE_DEVICE_NAME
+  }
+}
+
+data "template_cloudinit_config" "cloudinit-example" {
+  gzip          = false
+  base64_encode = false
+
+  part {
+    filename     = "init.cfg"
+    content_type = "text/cloud-config"
+    content      = data.template_file.init-script.rendered
+  }
+
+  part {
+    content_type = "text/x-shellscript"
+    content      = data.template_file.shell-script.rendered
+  }
+}
+
+
+# 2. touch instance.tf paste the following content
+
+resource "aws_instance" "example" {
+  ami           = var.AMIS[var.AWS_REGION]
+  instance_type = "t2.micro"
+
+  # the VPC subnet
+  subnet_id = aws_subnet.main-public-1.id
+
+  # the security group
+  vpc_security_group_ids = [aws_security_group.allow-ssh.id]
+
+  # the public SSH key
+  key_name = aws_key_pair.mykeypair.key_name
+
+  # user data
+  user_data = data.template_cloudinit_config.cloudinit-example.rendered
+}
+
+resource "aws_ebs_volume" "ebs-volume-1" {
+  availability_zone = "eu-west-1a"
+  size              = 20
+  type              = "gp2"
+  tags = {
+    Name = "extra volume data"
+  }
+}
+
+resource "aws_volume_attachment" "ebs-volume-1-attachment" {
+  device_name  = var.INSTANCE_DEVICE_NAME
+  volume_id    = aws_ebs_volume.ebs-volume-1.id
+  instance_id  = aws_instance.example.id
+  skip_destroy = true                            # skip destroy to avoid issues with terraform destroy
+}
+
+
+
+# 3. touch key.tf paste the following content
+
+resource "aws_key_pair" "mykeypair" {
+  key_name   = "mykeypair"
+  public_key = file(var.PATH_TO_PUBLIC_KEY)
+}
+
+
+# 4. touch provider.tf paste the following content
+
+resource "aws_key_pair" "mykeypair" {
+  key_name   = "mykeypair"
+  public_key = file(var.PATH_TO_PUBLIC_KEY)
+}
+
+
+# 4. mkdir scripts inside the directory add following files
+
+$ touch init.cfg  paste the following content
+
+#cloud-config
+
+repo_update: true
+repo_upgrade: all
+
+packages:
+  - lvm2
+
+output:
+  all: '| tee -a /var/log/cloud-init-output.log'
+
+------------------------------------------------------------------
+
+$ touch volumes.sh 
+
+#!/bin/bash
+
+set -ex 
+
+vgchange -ay
+
+DEVICE_FS=`blkid -o value -s TYPE ${DEVICE} || echo ""`
+if [ "`echo -n $DEVICE_FS`" == "" ] ; then 
+  # wait for the device to be attached
+  DEVICENAME=`echo "${DEVICE}" | awk -F '/' '{print $3}'`
+  DEVICEEXISTS=''
+  while [[ -z $DEVICEEXISTS ]]; do
+    echo "checking $DEVICENAME"
+    DEVICEEXISTS=`lsblk |grep "$DEVICENAME" |wc -l`
+    if [[ $DEVICEEXISTS != "1" ]]; then
+      sleep 15
+    fi
+  done
+  pvcreate ${DEVICE}
+  vgcreate data ${DEVICE}
+  lvcreate --name volume1 -l 100%FREE data
+  mkfs.ext4 /dev/data/volume1
+fi
+mkdir -p /data
+echo '/dev/data/volume1 /data ext4 defaults 0 0' >> /etc/fstab
+mount /data
+
+# install docker
+curl https://get.docker.com | bash
+
+
+
+# 5. touch securitygroup.tf paste the following content
+
+
+resource "aws_security_group" "allow-ssh" {
+  vpc_id      = aws_vpc.main.id
+  name        = "allow-ssh"
+  description = "security group that allows ssh and all egress traffic"
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = {
+    Name = "allow-ssh"
+  }
+}
+
+
+
+ 
+# 6. touch vars.tf paste the following content
+
+
+variable "AWS_REGION" {
+  default = "eu-west-1"
+}
+
+variable "PATH_TO_PRIVATE_KEY" {
+  default = "mykey"
+}
+
+variable "PATH_TO_PUBLIC_KEY" {
+  default = "mykey.pub"
+}
+
+variable "AMIS" {
+  type = map(string)
+  default = {
+    us-east-1 = "ami-13be557e"
+    us-west-2 = "ami-06b94666"
+    eu-west-1 = "ami-844e0bf7"
+  }
+}
+
+variable "INSTANCE_DEVICE_NAME" {
+  default = "/dev/xvdh"
+}
+
+
+
+# 7. touch versions.tf paste the following content
+
+terraform {
+  required_version = ">= 0.12"
+}
+
+
+
+
+# 8. touch vpc.tf paste the following content
+
+# Internet VPC
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16"
+  instance_tenancy     = "default"
+  enable_dns_support   = "true"
+  enable_dns_hostnames = "true"
+  enable_classiclink   = "false"
+  tags = {
+    Name = "main"
+  }
+}
+
+# Subnets
+resource "aws_subnet" "main-public-1" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.1.0/24"
+  map_public_ip_on_launch = "true"
+  availability_zone       = "eu-west-1a"
+
+  tags = {
+    Name = "main-public-1"
+  }
+}
+
+resource "aws_subnet" "main-public-2" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.2.0/24"
+  map_public_ip_on_launch = "true"
+  availability_zone       = "eu-west-1b"
+
+  tags = {
+    Name = "main-public-2"
+  }
+}
+
+resource "aws_subnet" "main-public-3" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.3.0/24"
+  map_public_ip_on_launch = "true"
+  availability_zone       = "eu-west-1c"
+
+  tags = {
+    Name = "main-public-3"
+  }
+}
+
+resource "aws_subnet" "main-private-1" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.4.0/24"
+  map_public_ip_on_launch = "false"
+  availability_zone       = "eu-west-1a"
+
+  tags = {
+    Name = "main-private-1"
+  }
+}
+
+resource "aws_subnet" "main-private-2" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.5.0/24"
+  map_public_ip_on_launch = "false"
+  availability_zone       = "eu-west-1b"
+
+  tags = {
+    Name = "main-private-2"
+  }
+}
+
+resource "aws_subnet" "main-private-3" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.6.0/24"
+  map_public_ip_on_launch = "false"
+  availability_zone       = "eu-west-1c"
+
+  tags = {
+    Name = "main-private-3"
+  }
+}
+
+# Internet GW
+resource "aws_internet_gateway" "main-gw" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "main"
+  }
+}
+
+# route tables
+resource "aws_route_table" "main-public" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main-gw.id
+  }
+
+  tags = {
+    Name = "main-public-1"
+  }
+}
+
+# route associations public
+resource "aws_route_table_association" "main-public-1-a" {
+  subnet_id      = aws_subnet.main-public-1.id
+  route_table_id = aws_route_table.main-public.id
+}
+
+resource "aws_route_table_association" "main-public-2-a" {
+  subnet_id      = aws_subnet.main-public-2.id
+  route_table_id = aws_route_table.main-public.id
+}
+
+resource "aws_route_table_association" "main-public-3-a" {
+  subnet_id      = aws_subnet.main-public-3.id
+  route_table_id = aws_route_table.main-public.id
+}
+
+
+
+
+# create keyfile to access instance
+
+$ ssh-keygen -f mykey
+
+
+
+# intialize the directory
+
+$ terraform init
+
+# plan the infra
+
+$ terraform plan
+
+# apply the infra
+
+$ terraform apply
+
+# view the infra
+
+$ terraform show
+
+# remove the infra
+
+$ terraform destroy
+
+
+------------------------------------------------------------------------------------------
 
 
 
