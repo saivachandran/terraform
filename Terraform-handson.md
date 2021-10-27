@@ -1970,3 +1970,378 @@ terraform {
 
 --------------------------------------------------------------------------------------
 
+# create iam users and groups using terraform
+
+1. configure aws cli first then follow the steps
+
+2. touch iam.tf paste the following content
+
+# group definition
+resource "aws_iam_group" "administrators" {
+  name = "administrators"
+}
+
+resource "aws_iam_policy_attachment" "administrators-attach" {
+  name       = "administrators-attach"
+  groups     = [aws_iam_group.administrators.name]
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+# user
+resource "aws_iam_user" "admin1" {
+  name = "admin1"
+}
+
+resource "aws_iam_user" "admin2" {
+  name = "admin2"
+}
+
+resource "aws_iam_group_membership" "administrators-users" {
+  name = "administrators-users"
+  users = [
+    aws_iam_user.admin1.name,
+    aws_iam_user.admin2.name,
+  ]
+  group = aws_iam_group.administrators.name
+}
+
+output "warning" {
+  value = "WARNING: make sure you're not using the AdministratorAccess policy for other users/groups/roles. If this is the case, don't run terraform destroy, but manually unlink the created resources"
+}
+
+
+
+2. paste provider.tf  paste the following content
+
+provider "aws" {
+  region = var.AWS_REGION
+}
+
+
+3.touch vars.tf  paste the following config
+
+variable "AWS_REGION" {
+  default = "eu-west-1"
+}
+
+
+4. touch versions.tf  paste the following config
+
+terraform {
+  required_version = ">= 0.12"
+}
+
+
+5. terraform init
+
+6. terraform apply
+
+------------------------------------------------------------------------------------------------
+
+# iam roles with s3 access using terraform
+-------------------------------------------
+
+1. touch iam.tf paste the following configuration
+
+resource "aws_iam_role" "s3-mybucket-role" {
+  name               = "s3-mybucket-role"
+  assume_role_policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": "sts:AssumeRole",
+      "Principal": {
+        "Service": "ec2.amazonaws.com"
+      },
+      "Effect": "Allow",
+      "Sid": ""
+    }
+  ]
+}
+EOF
+
+}
+
+resource "aws_iam_instance_profile" "s3-mybucket-role-instanceprofile" {
+  name = "s3-mybucket-role"
+  role = aws_iam_role.s3-mybucket-role.name
+}
+
+resource "aws_iam_role_policy" "s3-mybucket-role-policy" {
+  name = "s3-mybucket-role-policy"
+  role = aws_iam_role.s3-mybucket-role.id
+  policy = <<EOF
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+              "s3:*"
+            ],
+            "Resource": [
+              "arn:aws:s3:::mybucket-c29df1",
+              "arn:aws:s3:::mybucket-c29df1/*"
+            ]
+        }
+    ]
+}
+EOF
+
+}
+
+
+
+2.  touch instance.tf  paste the following configuration
+
+resource "aws_instance" "example" {
+  ami           = var.AMIS[var.AWS_REGION]
+  instance_type = "t2.micro"
+
+  # the VPC subnet
+  subnet_id = aws_subnet.main-public-1.id
+
+  # the security group
+  vpc_security_group_ids = [aws_security_group.example-instance.id]
+
+  # the public SSH key
+  key_name = aws_key_pair.mykeypair.key_name
+
+  # role:
+  iam_instance_profile = aws_iam_instance_profile.s3-mybucket-role-instanceprofile.name
+}
+
+
+
+3. touch  key.tf  paste the following configuration
+
+resource "aws_key_pair" "mykeypair" {
+  key_name   = "mykeypair"
+  public_key = file(var.PATH_TO_PUBLIC_KEY)
+}
+
+
+
+4. touch output.tf paste the following configuration
+
+output "instance" {
+  value = aws_instance.example.public_ip
+}
+
+
+5. touch provider.tf paste the following configuration
+
+provider "aws" {
+  region = var.AWS_REGION
+}
+
+
+6. touch s3.tf paste the following configuration
+
+resource "aws_s3_bucket" "b" {
+  bucket = "mybucket-6512rt"
+  acl    = "private"
+
+  tags = {
+    Name = "mybucket-6512rt"
+  }
+}
+
+
+7. touch securitygroup.tf paste the following configuration
+
+resource "aws_security_group" "example-instance" {
+  vpc_id      = aws_vpc.main.id
+  name        = "allow-ssh"
+  description = "security group that allows ssh and all egress traffic"
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = {
+    Name = "example-instance"
+  }
+}
+
+
+8. touch vars.tf paste the following configuration
+
+variable "AWS_REGION" {
+  default = "eu-west-1"
+}
+
+variable "PATH_TO_PRIVATE_KEY" {
+  default = "mykey"
+}
+
+variable "PATH_TO_PUBLIC_KEY" {
+  default = "mykey.pub"
+}
+
+variable "AMIS" {
+  type = map(string)
+  default = {
+    us-east-1 = "ami-13be557e"
+    us-west-2 = "ami-06b94666"
+    eu-west-1 = "ami-0a8e758f5e873d1c1"
+  }
+}
+
+
+
+9. versions.tf  paste the following configuration
+
+terraform {
+  required_version = ">= 0.12"
+}
+
+
+
+10. touch vpc.tf paste the following configuration
+
+10. # Internet VPC
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16"
+  instance_tenancy     = "default"
+  enable_dns_support   = "true"
+  enable_dns_hostnames = "true"
+  enable_classiclink   = "false"
+  tags = {
+    Name = "main"
+  }
+}
+
+# Subnets
+resource "aws_subnet" "main-public-1" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.1.0/24"
+  map_public_ip_on_launch = "true"
+  availability_zone       = "eu-west-1a"
+
+  tags = {
+    Name = "main-public-1"
+  }
+}
+
+resource "aws_subnet" "main-public-2" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.2.0/24"
+  map_public_ip_on_launch = "true"
+  availability_zone       = "eu-west-1b"
+
+  tags = {
+    Name = "main-public-2"
+  }
+}
+
+resource "aws_subnet" "main-public-3" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.3.0/24"
+  map_public_ip_on_launch = "true"
+  availability_zone       = "eu-west-1c"
+
+  tags = {
+    Name = "main-public-3"
+  }
+}
+
+resource "aws_subnet" "main-private-1" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.4.0/24"
+  map_public_ip_on_launch = "false"
+  availability_zone       = "eu-west-1a"
+
+  tags = {
+    Name = "main-private-1"
+  }
+}
+
+resource "aws_subnet" "main-private-2" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.5.0/24"
+  map_public_ip_on_launch = "false"
+  availability_zone       = "eu-west-1b"
+
+  tags = {
+    Name = "main-private-2"
+  }
+}
+
+resource "aws_subnet" "main-private-3" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.6.0/24"
+  map_public_ip_on_launch = "false"
+  availability_zone       = "eu-west-1c"
+
+  tags = {
+    Name = "main-private-3"
+  }
+}
+
+# Internet GW
+resource "aws_internet_gateway" "main-gw" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "main"
+  }
+}
+
+# route tables
+resource "aws_route_table" "main-public" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main-gw.id
+  }
+
+  tags = {
+    Name = "main-public-1"
+  }
+}
+
+# route associations public
+resource "aws_route_table_association" "main-public-1-a" {
+  subnet_id      = aws_subnet.main-public-1.id
+  route_table_id = aws_route_table.main-public.id
+}
+
+resource "aws_route_table_association" "main-public-2-a" {
+  subnet_id      = aws_subnet.main-public-2.id
+  route_table_id = aws_route_table.main-public.id
+}
+
+resource "aws_route_table_association" "main-public-3-a" {
+  subnet_id      = aws_subnet.main-public-3.id
+  route_table_id = aws_route_table.main-public.id
+}
+
+
+
+11. ssh-keygen -f mykey
+
+12. terraform init
+
+13. terraform apply
+
+
+14. ssh instance
+
+15. echo "test" > test.txt
+
+16. aws s3 cp test.txt s3://mybucket-6512rt/test.txt
+
+
+-----------------------------------------------------------------------------------------------------
+
+
