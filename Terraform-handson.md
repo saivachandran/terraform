@@ -2344,4 +2344,303 @@ resource "aws_route_table_association" "main-public-3-a" {
 
 -----------------------------------------------------------------------------------------------------
 
+# Autocaling using terraform
+----------------------------
 
+1. paste autoscalingpolicy.tf paste the following configuration
+
+# scale up alarm
+
+resource "aws_autoscaling_policy" "example-cpu-policy" {
+  name                   = "example-cpu-policy"
+  autoscaling_group_name = aws_autoscaling_group.example-autoscaling.name
+  adjustment_type        = "ChangeInCapacity"
+  scaling_adjustment     = "1"
+  cooldown               = "300"
+  policy_type            = "SimpleScaling"
+}
+
+resource "aws_cloudwatch_metric_alarm" "example-cpu-alarm" {
+  alarm_name          = "example-cpu-alarm"
+  alarm_description   = "example-cpu-alarm"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = "120"
+  statistic           = "Average"
+  threshold           = "30"
+
+  dimensions = {
+    "AutoScalingGroupName" = aws_autoscaling_group.example-autoscaling.name
+  }
+
+  actions_enabled = true
+  alarm_actions   = [aws_autoscaling_policy.example-cpu-policy.arn]
+}
+
+# scale down alarm
+resource "aws_autoscaling_policy" "example-cpu-policy-scaledown" {
+  name                   = "example-cpu-policy-scaledown"
+  autoscaling_group_name = aws_autoscaling_group.example-autoscaling.name
+  adjustment_type        = "ChangeInCapacity"
+  scaling_adjustment     = "-1"
+  cooldown               = "300"
+  policy_type            = "SimpleScaling"
+}
+
+resource "aws_cloudwatch_metric_alarm" "example-cpu-alarm-scaledown" {
+  alarm_name          = "example-cpu-alarm-scaledown"
+  alarm_description   = "example-cpu-alarm-scaledown"
+  comparison_operator = "LessThanOrEqualToThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "CPUUtilization"
+  namespace           = "AWS/EC2"
+  period              = "120"
+  statistic           = "Average"
+  threshold           = "5"
+
+  dimensions = {
+    "AutoScalingGroupName" = aws_autoscaling_group.example-autoscaling.name
+  }
+
+  actions_enabled = true
+  alarm_actions   = [aws_autoscaling_policy.example-cpu-policy-scaledown.arn]
+}
+
+
+2.  touch autoscaling.tf paste the following configuration
+
+resource "aws_launch_configuration" "example-launchconfig" {
+  name_prefix     = "example-launchconfig"
+  image_id        = var.AMIS[var.AWS_REGION]
+  instance_type   = "t2.micro"
+  key_name        = aws_key_pair.mykeypair.key_name
+  security_groups = [aws_security_group.allow-ssh.id]
+}
+
+resource "aws_autoscaling_group" "example-autoscaling" {
+  name                      = "example-autoscaling"
+  vpc_zone_identifier       = [aws_subnet.main-public-1.id, aws_subnet.main-public-2.id]
+  launch_configuration      = aws_launch_configuration.example-launchconfig.name
+  min_size                  = 1
+  max_size                  = 2
+  health_check_grace_period = 300
+  health_check_type         = "EC2"
+  force_delete              = true
+
+  tag {
+    key                 = "Name"
+    value               = "ec2 instance"
+    propagate_at_launch = true
+  }
+}
+
+
+3. paste key.tf paste the following configuration
+
+resource "aws_key_pair" "mykeypair" {
+  key_name   = "mykeypair"
+  public_key = file(var.PATH_TO_PUBLIC_KEY)
+  lifecycle {
+    ignore_changes = [public_key]
+  }
+}
+
+
+
+4.  touch securitygroup.tf paste the following configuration
+
+resource "aws_security_group" "allow-ssh" {
+  vpc_id      = aws_vpc.main.id
+  name        = "allow-ssh"
+  description = "security group that allows ssh and all egress traffic"
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  tags = {
+    Name = "allow-ssh"
+  }
+}
+
+
+5. paste provider.tf paste the following configuration
+
+provider "aws" {
+  region = var.AWS_REGION
+}
+
+
+
+6. touch vars.tf  paste the following configuration
+
+variable "AWS_REGION" {
+  default = "eu-west-1"
+}
+
+variable "PATH_TO_PRIVATE_KEY" {
+  default = "mykey"
+}
+
+variable "PATH_TO_PUBLIC_KEY" {
+  default = "mykey.pub"
+}
+
+variable "AMIS" {
+  type = map(string)
+  default = {
+    us-east-1 = "ami-13be557e"
+    us-west-2 = "ami-06b94666"
+    eu-west-1 = "ami-844e0bf7"
+  }
+}
+
+
+7. touch vpc.tf paste the following configuration
+
+# Internet VPC
+resource "aws_vpc" "main" {
+  cidr_block           = "10.0.0.0/16"
+  instance_tenancy     = "default"
+  enable_dns_support   = "true"
+  enable_dns_hostnames = "true"
+  enable_classiclink   = "false"
+  tags = {
+    Name = "main"
+  }
+}
+
+# Subnets
+resource "aws_subnet" "main-public-1" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.1.0/24"
+  map_public_ip_on_launch = "true"
+  availability_zone       = "eu-west-1a"
+
+  tags = {
+    Name = "main-public-1"
+  }
+}
+
+resource "aws_subnet" "main-public-2" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.2.0/24"
+  map_public_ip_on_launch = "true"
+  availability_zone       = "eu-west-1b"
+
+  tags = {
+    Name = "main-public-2"
+  }
+}
+
+resource "aws_subnet" "main-public-3" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.3.0/24"
+  map_public_ip_on_launch = "true"
+  availability_zone       = "eu-west-1c"
+
+  tags = {
+    Name = "main-public-3"
+  }
+}
+
+resource "aws_subnet" "main-private-1" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.4.0/24"
+  map_public_ip_on_launch = "false"
+  availability_zone       = "eu-west-1a"
+
+  tags = {
+    Name = "main-private-1"
+  }
+}
+
+resource "aws_subnet" "main-private-2" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.5.0/24"
+  map_public_ip_on_launch = "false"
+  availability_zone       = "eu-west-1b"
+
+  tags = {
+    Name = "main-private-2"
+  }
+}
+
+resource "aws_subnet" "main-private-3" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.6.0/24"
+  map_public_ip_on_launch = "false"
+  availability_zone       = "eu-west-1c"
+
+  tags = {
+    Name = "main-private-3"
+  }
+}
+
+# Internet GW
+resource "aws_internet_gateway" "main-gw" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "main"
+  }
+}
+
+# route tables
+resource "aws_route_table" "main-public" {
+  vpc_id = aws_vpc.main.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main-gw.id
+  }
+
+  tags = {
+    Name = "main-public-1"
+  }
+}
+
+# route associations public
+resource "aws_route_table_association" "main-public-1-a" {
+  subnet_id      = aws_subnet.main-public-1.id
+  route_table_id = aws_route_table.main-public.id
+}
+
+resource "aws_route_table_association" "main-public-2-a" {
+  subnet_id      = aws_subnet.main-public-2.id
+  route_table_id = aws_route_table.main-public.id
+}
+
+resource "aws_route_table_association" "main-public-3-a" {
+  subnet_id      = aws_subnet.main-public-3.id
+  route_table_id = aws_route_table.main-public.id
+}
+
+
+
+8. touch versions.tf  paste the following configuration
+
+terraform {
+  required_version = ">= 0.12"
+}
+
+
+9. ssh-keygen -f mykey
+
+10. terraform init
+
+11. terraform apply
+
+12. terraform destroy
+
+
+----------------------------------------------------------------------------------------------
