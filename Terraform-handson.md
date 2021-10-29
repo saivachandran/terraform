@@ -2960,5 +2960,184 @@ resource "aws_route_table_association" "main-public-3-a" {
 
 ------------------------------------------------------------------------------------
 
+# interpolation and conditional using terraform
+-----------------------------------------------
+
+1. touch instance.tf paste the following configuration
+
+data "aws_ami" "ubuntu" {
+  most_recent = true
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-trusty-14.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  owners = ["099720109477"] # Canonical
+}
+
+resource "aws_instance" "example" {
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = "t2.micro"
+
+  # the VPC subnet
+  subnet_id = var.ENV == "prod" ? module.vpc-prod.public_subnets[0] : module.vpc-dev.public_subnets[0]
+
+  # the security group
+  vpc_security_group_ids = [var.ENV == "prod" ? aws_security_group.allow-ssh-prod.id : aws_security_group.allow-ssh-dev.id]
+
+  # the public SSH key
+  key_name = aws_key_pair.mykeypair.key_name
+}
 
 
+
+2. touch key.tf paste the following configuration
+
+resource "aws_key_pair" "mykeypair" {
+  key_name   = "mykeypair"
+  public_key = file(var.PATH_TO_PUBLIC_KEY)
+}
+
+
+3. touch provider.tf  paste the following configuration
+
+provider "aws" {
+  region = var.AWS_REGION
+}
+
+
+4. touch securitygroup.tf paste the following configuration
+
+resource "aws_security_group" "allow-ssh-prod" {
+  vpc_id      = module.vpc-prod.vpc_id
+  name        = "allow-ssh"
+  description = "security group that allows ssh and all egress traffic"
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "allow-ssh"
+  }
+}
+
+resource "aws_security_group" "allow-ssh-dev" {
+  vpc_id      = module.vpc-dev.vpc_id
+  name        = "allow-ssh"
+  description = "security group that allows ssh and all egress traffic"
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "allow-ssh"
+  }
+}
+
+
+
+5. touch vars.tf paste the following configuration
+
+variable "AWS_REGION" {
+  default = "eu-west-1"
+}
+
+variable "PATH_TO_PRIVATE_KEY" {
+  default = "mykey"
+}
+
+variable "PATH_TO_PUBLIC_KEY" {
+  default = "mykey.pub"
+}
+
+variable "ENV" {
+  default = "prod"
+}
+
+
+6.  touch vpc.tf  paste the following configuration
+
+module "vpc-prod" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "2.59.0"
+
+  name = "vpc-prod"
+  cidr = "10.0.0.0/16"
+
+  azs             = ["${var.AWS_REGION}a", "${var.AWS_REGION}b", "${var.AWS_REGION}c"]
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+
+  enable_nat_gateway = false
+  enable_vpn_gateway = false
+
+  tags = {
+    Terraform   = "true"
+    Environment = "prod"
+  }
+}
+
+module "vpc-dev" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "2.59.0"
+
+  name = "vpc-dev"
+  cidr = "10.0.0.0/16"
+
+  azs             = ["${var.AWS_REGION}a", "${var.AWS_REGION}b", "${var.AWS_REGION}c"]
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+
+  enable_nat_gateway = false
+  enable_vpn_gateway = false
+
+  tags = {
+    Terraform   = "true"
+    Environment = "dev"
+  }
+}
+
+
+7. touch versions.tf paste the following configuration
+
+terraform {
+  required_version = ">= 0.12"
+}
+
+
+
+8. ssh-keygen -f mykey
+
+9. terraform init
+
+10. terraform apply
+
+--------------------------------------------------------------------------------------------------
