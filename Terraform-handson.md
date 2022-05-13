@@ -11,6 +11,14 @@
 
 4. terraform --help
 
+method 2: latest version
+
+curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo apt-key add -
+
+sudo apt-add-repository "deb [arch=amd64] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+
+sudo apt-get update && sudo apt-get install terraform
+
 ------------------------------------------------------------------
 
 ## Deploy docker conatiner using terraform
