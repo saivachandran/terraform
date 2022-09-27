@@ -3178,3 +3178,18 @@ resource "aws_instance" "import" {
   
   # terraform apply
   
+  
+# terraform delete specific resource
+  
+$ terraform state list
+$ terraform destroy -target RESOURCE_TYPE.NAME
+$ terraform destroy -target RESOURCE_TYPE.NAME -target RESOURCE_TYPE2.NAME
+$ terraform state list
+
+Option of skipping a resource while destroying terraform resources?
+
+$ terraform state list
+$ terraform destroy -target=RESOURCE_TYPE.NAME -target=RESOURCE_TYPE2.NAME
+$ terraform state list
+  
+  
